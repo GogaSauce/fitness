@@ -38,7 +38,7 @@ cp .env.example .env   # fill in your Supabase URL + publishable key
 
 ### 3. Run
 
-```sh
+```sh - be sure ur in /trackit
 npm install
 npx expo start
 ```

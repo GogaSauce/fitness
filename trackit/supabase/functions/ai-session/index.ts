@@ -5,8 +5,11 @@
 //   { mode: 'transcribe', audio: <base64>, mimeType: 'audio/m4a' } → { transcript }
 //   { mode: 'parse', text: <string> }                              → ParsedSession JSON
 
-const GEMINI_URL =
-  'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+// Model is overridable via the GEMINI_MODEL secret without a code change.
+// Default to a current free-tier model.
+const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-flash-lite-latest';
+const genUrl = (model: string) =>
+  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -55,22 +58,29 @@ function json(body: unknown, status = 200): Response {
 
 async function callGemini(
   apiKey: string,
+  model: string,
   parts: unknown[],
   jsonOutput: boolean,
 ): Promise<string> {
-  const res = await fetch(GEMINI_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify({
-      contents: [{ parts }],
-      ...(jsonOutput
-        ? { generationConfig: { response_mime_type: 'application/json' } }
-        : {}),
-    }),
+  const payload = JSON.stringify({
+    contents: [{ parts }],
+    ...(jsonOutput
+      ? { generationConfig: { response_mime_type: 'application/json' } }
+      : {}),
   });
+
+  // Gemini free tier intermittently returns 503 (overloaded); retry a few times
+  // with a short backoff before giving up.
+  let res!: Response;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    res = await fetch(genUrl(model), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: payload,
+    });
+    if (res.status !== 503) break;
+    await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+  }
 
   if (!res.ok) {
     const detail = await res.text();
@@ -90,9 +100,9 @@ Deno.serve(async (req) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
-  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  const apiKey = Deno.env.get('API_KEY') ?? Deno.env.get('GEMINI_API_KEY');
   if (!apiKey) {
-    return json({ error: 'GEMINI_API_KEY is not configured' }, 500);
+    return json({ error: 'API_KEY is not configured' }, 500);
   }
 
   let body: Record<string, unknown>;
@@ -110,6 +120,7 @@ Deno.serve(async (req) => {
       }
       const transcript = await callGemini(
         apiKey,
+        MODEL,
         [
           { inline_data: { mime_type: mimeType, data: audio } },
           { text: TRANSCRIBE_PROMPT },
@@ -124,7 +135,7 @@ Deno.serve(async (req) => {
       if (typeof text !== 'string' || !text.trim()) {
         return json({ error: 'parse requires non-empty text' }, 400);
       }
-      const raw = await callGemini(apiKey, [{ text: PARSE_PROMPT + text }], true);
+      const raw = await callGemini(apiKey, MODEL, [{ text: PARSE_PROMPT + text }], true);
       // Defensive: strip markdown fences if the model adds them anyway.
       const cleaned = raw.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
       return json(JSON.parse(cleaned));

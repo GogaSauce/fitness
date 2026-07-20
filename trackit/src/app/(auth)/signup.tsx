@@ -1,4 +1,4 @@
-import { Link } from 'expo-router';
+import { Link, useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
   ActivityIndicator,
@@ -10,10 +10,11 @@ import {
   View,
 } from 'react-native';
 
+import { upgradeGuestAccount } from '@/lib/auth';
 import { COLORS } from '@/lib/types';
-import { supabase } from '@/lib/supabase';
 
 export default function Signup() {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -24,19 +25,23 @@ export default function Signup() {
     setError(null);
     setNotice(null);
     setLoading(true);
-    const { data, error: err } = await supabase.auth.signUp({
-      email: email.trim(),
+    // If the user is currently a guest, this upgrades their anonymous account
+    // in place — same user_id, so all sessions and streak data carry over.
+    const { error: err, needsEmailConfirmation } = await upgradeGuestAccount(
+      email.trim(),
       password,
-    });
+    );
     setLoading(false);
     if (err) {
-      setError(err.message);
-    } else if (!data.session) {
-      // Email confirmation is enabled on the Supabase project.
-      setNotice('Check your email to confirm your account, then log in.');
+      setError(err);
+    } else if (needsEmailConfirmation) {
+      setNotice(
+        "Account created! Check your email to confirm your address. Your streak and history are already saved.",
+      );
+    } else {
+      // Upgrade complete and confirmed — drop straight back into the app.
+      router.replace('/');
     }
-    // With confirmation disabled, a session comes back and the auth gate
-    // in the root layout switches straight to (tabs).
   };
 
   return (

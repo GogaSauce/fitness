@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ScrollView, Text, TouchableOpacity, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { isGuest } from '@/lib/auth';
 import { todayString } from '@/lib/dates';
 import {
   getReminderTime,
@@ -26,16 +28,26 @@ function formatHour(time: string): string {
 
 export default function Profile() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [email, setEmail] = useState('');
+  const [guest, setGuest] = useState(false);
   const [prefs, setPrefs] = useState<ActivityType[]>(ALL_TYPES);
   const [reminder, setReminder] = useState('20:00');
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? ''));
+    const loadUser = () =>
+      supabase.auth.getUser().then(({ data }) => {
+        setEmail(data.user?.email ?? '');
+        setGuest(isGuest(data.user));
+      });
+    loadUser();
     AsyncStorage.getItem(ACTIVITY_PREFS_KEY).then((raw) => {
       if (raw) setPrefs(JSON.parse(raw));
     });
     getReminderTime().then(setReminder);
+    // Reflect a guest → registered upgrade without needing an app restart.
+    const { data: sub } = supabase.auth.onAuthStateChange(() => loadUser());
+    return () => sub.subscription.unsubscribe();
   }, []);
 
   const togglePref = (type: ActivityType) => {
@@ -70,7 +82,23 @@ export default function Profile() {
         <Text className="text-xs font-bold uppercase tracking-wider text-secondary">
           Account
         </Text>
-        <Text className="mt-2 text-base text-white">{email}</Text>
+        {guest ? (
+          <>
+            <Text className="mt-2 text-sm text-secondary">
+              You're using a guest account — your data is saved on this device.
+            </Text>
+            <TouchableOpacity
+              onPress={() => router.push('/signup')}
+              className="mt-4 items-center rounded-xl bg-primary py-3"
+            >
+              <Text className="text-base font-semibold text-white">
+                Create Account
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <Text className="mt-2 text-base text-white">{email}</Text>
+        )}
       </View>
 
       <View className="mb-4 rounded-2xl bg-card p-4">
@@ -137,12 +165,14 @@ export default function Profile() {
         </View>
       </View>
 
-      <TouchableOpacity
-        onPress={() => supabase.auth.signOut()}
-        className="mt-2 items-center rounded-xl border border-line py-4"
-      >
-        <Text className="text-base font-semibold text-red-400">Sign Out</Text>
-      </TouchableOpacity>
+      {!guest && (
+        <TouchableOpacity
+          onPress={() => supabase.auth.signOut()}
+          className="mt-2 items-center rounded-xl border border-line py-4"
+        >
+          <Text className="text-base font-semibold text-red-400">Sign Out</Text>
+        </TouchableOpacity>
+      )}
 
       <Text className="mt-8 text-center text-xs text-secondary">
         TrackIt v{Constants.expoConfig?.version ?? '1.0.0'}

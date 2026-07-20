@@ -1,27 +1,28 @@
 import '../global.css';
 
-import type { Session } from '@supabase/supabase-js';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
 
-import { COLORS } from '@/lib/types';
+import { ensureSession } from '@/lib/auth';
 import { supabase } from '@/lib/supabase';
+import { COLORS } from '@/lib/types';
 
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-  const [session, setSession] = useState<Session | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setReady(true);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
+    // Guest-first: make sure there's always a session (anonymous if needed)
+    // before rendering, so nobody ever hits a login wall.
+    ensureSession().finally(() => setReady(true));
+
+    // If a registered user signs out, drop them back to a fresh guest session
+    // rather than a login screen.
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') ensureSession();
     });
     return () => sub.subscription.unsubscribe();
   }, []);
@@ -35,18 +36,16 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style="light" />
+      {/* Both groups are always registered so the signup/login screens remain
+          reachable (via the soft banner and profile) from an active session. */}
       <Stack
         screenOptions={{
           headerShown: false,
           contentStyle: { backgroundColor: COLORS.background },
         }}
       >
-        <Stack.Protected guard={!!session}>
-          <Stack.Screen name="(tabs)" />
-        </Stack.Protected>
-        <Stack.Protected guard={!session}>
-          <Stack.Screen name="(auth)" />
-        </Stack.Protected>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="(auth)" />
       </Stack>
     </>
   );

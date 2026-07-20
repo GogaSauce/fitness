@@ -2,7 +2,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,10 +14,11 @@ import {
 } from 'react-native';
 
 import SessionCard from './SessionCard';
+import SessionReviewModal from './SessionReviewModal';
 import VoiceRecorder from './VoiceRecorder';
 import { formatDateHeader } from '@/lib/dates';
-import { fetchSessionsForDate, logSession } from '@/lib/sessions';
-import { COLORS, type Session } from '@/lib/types';
+import { fallbackParse, fetchSessionsForDate, parseSessionText } from '@/lib/sessions';
+import { COLORS, type ParsedSession, type Session } from '@/lib/types';
 
 interface Props {
   date: string | null; // visible when non-null (YYYY-MM-DD)
@@ -35,6 +35,9 @@ export default function DayModal({ date, onClose, onLogged }: Props) {
   const [typedText, setTypedText] = useState('');
   const [transcript, setTranscript] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [parsed, setParsed] = useState<ParsedSession | null>(null);
+  const [reviewText, setReviewText] = useState('');
+  const [reviewNotice, setReviewNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!date) return;
@@ -42,6 +45,7 @@ export default function DayModal({ date, onClose, onLogged }: Props) {
     setTab('type');
     setTypedText('');
     setTranscript('');
+    setParsed(null);
     fetchSessionsForDate(date)
       .then(setSessions)
       .catch(() => {});
@@ -49,29 +53,38 @@ export default function DayModal({ date, onClose, onLogged }: Props) {
 
   const text = (tab === 'type' ? typedText : transcript).trim();
 
+  // Send the brain dump to the AI, then open the review screen with the result.
+  // If the AI is unavailable, still open the review with a local draft so the
+  // user can log manually instead of hitting a dead end.
   const submit = async () => {
     if (!date || !text) return;
     setSubmitting(true);
+    setReviewText(text);
     try {
-      await logSession(date, text);
-      onLogged();
+      const result = await parseSessionText(text);
+      setReviewNotice(null);
+      setParsed(result);
     } catch (e) {
-      Alert.alert(
-        "Couldn't log session",
-        e instanceof Error ? e.message : 'Something went wrong. Try again.',
+      const message =
+        e instanceof Error ? e.message : 'Something went wrong.';
+      console.warn('[DayModal] parse failed, opening manual review:', message);
+      setReviewNotice(
+        "AI couldn't process this automatically — review and fill in the details.",
       );
+      setParsed(fallbackParse(text));
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <Modal
-      visible={date !== null}
-      transparent
-      animationType="slide"
-      onRequestClose={onClose}
-    >
+    <>
+      <Modal
+        visible={date !== null && parsed === null}
+        transparent
+        animationType="slide"
+        onRequestClose={onClose}
+      >
       <Pressable className="flex-1 bg-black/60" onPress={onClose} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
@@ -172,6 +185,19 @@ export default function DayModal({ date, onClose, onLogged }: Props) {
           )}
         </View>
       </KeyboardAvoidingView>
-    </Modal>
+      </Modal>
+
+      <SessionReviewModal
+        date={date}
+        rawText={reviewText}
+        parsed={parsed}
+        notice={reviewNotice}
+        onDiscard={() => setParsed(null)}
+        onSaved={() => {
+          setParsed(null);
+          onLogged();
+        }}
+      />
+    </>
   );
 }
